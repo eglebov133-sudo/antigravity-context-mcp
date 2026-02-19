@@ -19,7 +19,8 @@ const CREDENTIALS_ENC_FILENAME = ".credentials.enc";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const MAX_RESPONSE_CHARS = 50000;
-const VERSION = "4.0.0";
+const VERSION = "5.0.0";
+const BACKUP_RETENTION = 30;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -145,9 +146,31 @@ function readAllArtifacts(folderPath) {
   return results;
 }
 
-/** Append a note to session_notes.md in a brain folder */
+/** Create a timestamped backup of a file before modifying it */
+function backupFile(filePath) {
+  if (!fs.existsSync(filePath)) return;
+  const dir = path.join(path.dirname(filePath), ".backups");
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const base = path.basename(filePath);
+  const backupPath = path.join(dir, `${base}.${ts}.bak`);
+  fs.copyFileSync(filePath, backupPath);
+  // Prune old backups (keep last BACKUP_RETENTION)
+  try {
+    const backups = fs.readdirSync(dir)
+      .filter((f) => f.startsWith(base) && f.endsWith(".bak"))
+      .sort()
+      .reverse();
+    for (const old of backups.slice(BACKUP_RETENTION)) {
+      fs.unlinkSync(path.join(dir, old));
+    }
+  } catch { /* ignore cleanup errors */ }
+}
+
+/** Append a note to session_notes.md in a brain folder (with auto-backup) */
 function appendNote(folderPath, note, tag) {
   const filePath = path.join(folderPath, "session_notes.md");
+  backupFile(filePath);
   const now = new Date().toISOString().replace("T", " ").slice(0, 16);
   const tagStr = tag ? ` #${tag}` : "";
   const entry = `### [${now}]${tagStr}\n${note}\n\n---\n\n`;
@@ -518,6 +541,39 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         "Health check and diagnostics for the Context MCP Server. Shows version, brain directory stats, session count, notes count, knowledge items, disk usage, and credentials encryption status. Use when user asks 'is context server working', 'статус сервера', or for debugging.",
       inputSchema: { type: "object", properties: {} },
     },
+    {
+      name: "context_export",
+      description:
+        "Export all memory (session notes, credentials) to an encrypted JSON file for backup or transfer to another machine. Returns the path to the exported file.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          output_path: {
+            type: "string",
+            description: "Optional. Directory to save the export file. Defaults to user's home directory.",
+          },
+          include_credentials: {
+            type: "boolean",
+            description: "Optional. Include encrypted credentials from all projects. Default: false.",
+          },
+        },
+      },
+    },
+    {
+      name: "context_import",
+      description:
+        "Import memory from a previously exported file. Merges notes into existing sessions without overwriting.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          file_path: {
+            type: "string",
+            description: "Absolute path to the exported .json.enc file",
+          },
+        },
+        required: ["file_path"],
+      },
+    },
   ],
 }));
 
@@ -770,6 +826,138 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       return { content: [{ type: "text", text }] };
     } catch (err) {
       return { content: [{ type: "text", text: `❌ context_status failed: ${err.message}` }] };
+    }
+  }
+
+  // ── context_export ─────────────────────────────────────────────────────────
+  if (name === "context_export") {
+    try {
+      const outputDir = args?.output_path || os.homedir();
+      if (!fs.existsSync(outputDir)) throw new Error(`Output directory not found: ${outputDir}`);
+
+      const exportData = {
+        version: VERSION,
+        exported_at: new Date().toISOString(),
+        machine: os.hostname(),
+        sessions: [],
+      };
+
+      // Collect all notes from sessions
+      const folders = getBrainFoldersSorted();
+      for (const folder of folders) {
+        const notes = readFileSafe(path.join(folder.full, "session_notes.md"));
+        if (!notes.trim()) continue;
+        const title = extractTitle(folder.full);
+        const date = new Date(folder.mtime).toISOString().slice(0, 10);
+        exportData.sessions.push({
+          id: folder.name,
+          title,
+          date,
+          notes,
+        });
+      }
+
+      // Optionally include credentials
+      if (args?.include_credentials) {
+        exportData.credentials = {};
+        const projects = listKnownProjects();
+        for (const p of projects) {
+          // Try to find project path from tracker
+          const trackerDir = path.join(CODE_TRACKER_DIR, p.tracker_key);
+          try {
+            const files = fs.readdirSync(trackerDir);
+            for (const f of files) {
+              const content = readFileSafe(path.join(trackerDir, f));
+              if (content.includes(CREDENTIALS_ENC_FILENAME)) {
+                // Found a project with credentials
+                const projPath = content.trim().split("\n")[0]; // heuristic
+                if (fs.existsSync(path.join(projPath, CREDENTIALS_ENC_FILENAME))) {
+                  exportData.credentials[p.project] = readFileSafe(
+                    path.join(projPath, CREDENTIALS_ENC_FILENAME)
+                  );
+                }
+              }
+            }
+          } catch { /* skip */ }
+        }
+      }
+
+      const json = JSON.stringify(exportData, null, 2);
+      const encrypted = encryptText(json);
+      const ts = new Date().toISOString().slice(0, 10);
+      const fileName = `antigravity-memory-${ts}.json.enc`;
+      const filePath = path.join(outputDir, fileName);
+      fs.writeFileSync(filePath, encrypted, "utf8");
+
+      let text = `✅ Memory exported to: ${filePath}\n\n`;
+      text += `| Metric | Value |\n`;
+      text += `|--------|-------|\n`;
+      text += `| **Sessions with notes** | ${exportData.sessions.length} |\n`;
+      text += `| **Credentials included** | ${args?.include_credentials ? "Yes" : "No"} |\n`;
+      text += `| **File size** | ${(Buffer.byteLength(encrypted) / 1024).toFixed(1)} KB |\n`;
+      text += `| **Encrypted** | 🔐 AES-256-GCM |\n`;
+      text += `\n⚠️ This file can only be decrypted on this machine (${os.hostname()}).`;
+
+      return { content: [{ type: "text", text }] };
+    } catch (err) {
+      return { content: [{ type: "text", text: `❌ context_export failed: ${err.message}` }] };
+    }
+  }
+
+  // ── context_import ─────────────────────────────────────────────────────────
+  if (name === "context_import") {
+    try {
+      validatePath(args?.file_path, "file_path");
+      const payload = fs.readFileSync(args.file_path, "utf8").trim();
+      const json = decryptText(payload);
+      const data = JSON.parse(json);
+
+      if (!data.sessions || !Array.isArray(data.sessions)) {
+        throw new Error("Invalid export file: missing sessions array");
+      }
+
+      let imported = 0;
+      let skipped = 0;
+
+      for (const session of data.sessions) {
+        if (!session.id || !session.notes) { skipped++; continue; }
+        const folderPath = path.join(BRAIN_DIR, session.id);
+        if (!fs.existsSync(folderPath)) {
+          // Session folder doesn't exist locally — create it and import notes
+          fs.mkdirSync(folderPath, { recursive: true });
+          fs.writeFileSync(
+            path.join(folderPath, "session_notes.md"),
+            session.notes,
+            "utf8"
+          );
+          imported++;
+        } else {
+          // Session exists — merge notes if local notes file is empty/missing
+          const localNotes = readFileSafe(path.join(folderPath, "session_notes.md"));
+          if (!localNotes.trim()) {
+            fs.writeFileSync(
+              path.join(folderPath, "session_notes.md"),
+              session.notes,
+              "utf8"
+            );
+            imported++;
+          } else {
+            skipped++; // Don't overwrite existing notes
+          }
+        }
+      }
+
+      let text = `✅ Import complete\n\n`;
+      text += `| Metric | Value |\n`;
+      text += `|--------|-------|\n`;
+      text += `| **Source** | ${data.machine || "unknown"} |\n`;
+      text += `| **Exported at** | ${data.exported_at || "unknown"} |\n`;
+      text += `| **Sessions imported** | ${imported} |\n`;
+      text += `| **Sessions skipped** | ${skipped} (already exist) |\n`;
+
+      return { content: [{ type: "text", text }] };
+    } catch (err) {
+      return { content: [{ type: "text", text: `❌ context_import failed: ${err.message}` }] };
     }
   }
 

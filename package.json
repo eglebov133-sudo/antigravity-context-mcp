@@ -1,6 +1,6 @@
 {
   "name": "antigravity-context-mcp",
-  "version": "4.0.0",
+  "version": "5.0.0",
   "description": "MCP server that provides Antigravity with project context from previous conversations. Solves the context loss problem between chat sessions.",
   "type": "module",
   "main": "server.js",

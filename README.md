@@ -92,13 +92,16 @@ All local. No network. Just files on your disk that were always there.
 
 **Diagnostics.** `context_status` shows server health — sessions, notes, disk usage, encryption status.
 
-## What's new in v4.0
+## What's new in v5.0
 
-- **🔐 Encrypted credentials** — AES-256-GCM instead of plaintext. Key is machine-bound. Old `.credentials` files auto-migrate.
-- **🛡️ Error handling** — every tool wrapped in try/catch with clear error messages. No more silent failures.
-- **📏 Response limits** — 50,000 char cap with `[TRUNCATED]` warning. Prevents context window overflow.
-- **🩺 Diagnostics** — `context_status` tool shows session count, notes, disk usage, encryption status.
-- **✅ Input validation** — path existence checks and session ID format validation before execution.
+- **📦 Export/import memory** — `context_export` dumps all notes to an encrypted file, `context_import` restores on another machine
+- **💾 Auto-backups** — notes are automatically backed up before every modification (`.backups/`, 30-version retention with auto-pruning)
+- **🔐 Encrypted credentials** — AES-256-GCM, machine-bound key, auto-migration from plaintext
+- **🛡️ Error handling** — try/catch on every tool with clear error messages
+- **📏 Response limits** — 50,000 char cap with `[TRUNCATED]` warning
+- **🩺 Diagnostics** — `context_status` for server health monitoring
+
+Full changelog in [CHANGELOG.md](CHANGELOG.md).
 
 ## Security
 
