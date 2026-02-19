@@ -1,0 +1,26 @@
+{
+  "name": "antigravity-context-mcp",
+  "version": "1.0.0",
+  "description": "MCP server that provides Antigravity with project context from previous conversations. Solves the context loss problem between chat sessions.",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "keywords": [
+    "antigravity",
+    "mcp",
+    "context",
+    "model-context-protocol",
+    "ai-coding",
+    "developer-tools"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/eglebov133/antigravity-context-mcp"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  }
+}
