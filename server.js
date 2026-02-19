@@ -68,13 +68,65 @@ function readTaskOnly(folderPath) {
 
 /** Read all artifacts from a brain folder (full content) */
 function readAllArtifacts(folderPath) {
-  const files = ["task.md", "walkthrough.md", "implementation_plan.md"];
+  const files = ["task.md", "walkthrough.md", "implementation_plan.md", "session_notes.md"];
   const results = {};
   for (const file of files) {
     const content = readFileSafe(path.join(folderPath, file));
     if (content.trim()) results[file] = content;
   }
   return results;
+}
+
+/** Append a note to session_notes.md in a brain folder */
+function appendNote(folderPath, note, tag) {
+  const filePath = path.join(folderPath, "session_notes.md");
+  const now = new Date().toISOString().replace("T", " ").slice(0, 16);
+  const tagStr = tag ? ` #${tag}` : "";
+  const entry = `### [${now}]${tagStr}\n${note}\n\n---\n\n`;
+  // Create header if file doesn't exist
+  if (!fs.existsSync(filePath)) {
+    fs.writeFileSync(filePath, `# Session Notes\n\n${entry}`, "utf8");
+  } else {
+    fs.appendFileSync(filePath, entry, "utf8");
+  }
+  return filePath;
+}
+
+/** Search notes across brain folders */
+function searchNotes(query, tag, lastN = 5) {
+  const folders = getBrainFoldersSorted().slice(0, lastN);
+  const results = [];
+  for (const folder of folders) {
+    const notesPath = path.join(folder.full, "session_notes.md");
+    const content = readFileSafe(notesPath);
+    if (!content.trim()) continue;
+    // Split into individual notes by --- separator
+    const entries = content.split(/^---$/m).map((e) => e.trim()).filter(Boolean);
+    for (const entry of entries) {
+      if (entry.startsWith("# Session Notes")) continue;
+      const matchesQuery = !query || entry.toLowerCase().includes(query.toLowerCase());
+      const matchesTag = !tag || entry.includes(`#${tag}`);
+      if (matchesQuery && matchesTag) {
+        const title = extractTitle(folder.full);
+        const date = new Date(folder.mtime).toISOString().slice(0, 10);
+        results.push({ sessionId: folder.name, date, title, entry });
+      }
+    }
+  }
+  return results;
+}
+
+/** Check if a brain folder's artifacts mention a given project path or name */
+function matchesProject(folderPath, projectPath) {
+  if (!projectPath) return true;
+  const normalized = projectPath.replace(/\\/g, "/").replace(/\/$/, "").toLowerCase();
+  const projectName = normalized.split("/").pop();
+  const files = ["task.md", "implementation_plan.md", "walkthrough.md"];
+  for (const file of files) {
+    const content = readFileSafe(path.join(folderPath, file)).toLowerCase();
+    if (content.includes(normalized) || content.includes(projectName)) return true;
+  }
+  return false;
 }
 
 function listKnownProjects() {
@@ -138,7 +190,7 @@ function writeCredentials(projectPath, entries) {
 // ─── MCP Server ───────────────────────────────────────────────────────────────
 
 const server = new Server(
-  { name: "antigravity-context", version: "2.0.0" },
+  { name: "antigravity-context", version: "3.0.0" },
   { capabilities: { tools: {} } }
 );
 
@@ -147,19 +199,35 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: "recall",
       description:
-        "Quick recall: returns ONLY the task checklist (task.md) from the most recent session. Lightweight, won't overload context. Use when user says 'continue', 'продолжи', 'what were we doing'. If you need more detail, follow up with recall_session.",
-      inputSchema: { type: "object", properties: {} },
+        "Quick recall: returns ONLY the task checklist (task.md) from the most recent session. Lightweight, won't overload context. Use when user says 'continue', 'продолжи', 'what were we doing'. If you need more detail, follow up with recall_session. By default filters to current project if project_path is provided.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          project_path: {
+            type: "string",
+            description: "Optional. Absolute path to the current project directory. When provided, only sessions mentioning this project are returned.",
+          },
+        },
+      },
     },
     {
       name: "recall_sessions",
       description:
-        "List recent sessions with dates and titles. Returns a compact index so you can pick which session to drill into. Use when user wants a broader view: 'what have we been working on', 'покажи сессии'.",
+        "List recent sessions with dates and titles. Returns a compact index so you can pick which session to drill into. Use when user wants a broader view: 'what have we been working on', 'покажи сессии'. By default filters to current project if project_path is provided. Use all_projects=true to see everything.",
       inputSchema: {
         type: "object",
         properties: {
           count: {
             type: "number",
             description: "How many sessions to list (default: 10, max: 20)",
+          },
+          project_path: {
+            type: "string",
+            description: "Optional. Absolute path to the current project directory. When provided, only sessions mentioning this project are returned.",
+          },
+          all_projects: {
+            type: "boolean",
+            description: "Optional. If true, show sessions from ALL projects regardless of project_path. Use when user explicitly asks about other projects.",
           },
         },
       },
@@ -224,6 +292,39 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: ["project_path", "context_text"],
       },
     },
+    {
+      name: "save_note",
+      description:
+        "Save an important note from the conversation (code words, instructions, decisions, credentials). Use this WHENEVER the user says 'запомни', 'remember', or shares something important that should persist across sessions. Notes are stored in session_notes.md in the brain folder.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          note: { type: "string", description: "The note text to save" },
+          tag: {
+            type: "string",
+            description: "Optional tag: codeword, instruction, decision, credential, todo",
+          },
+          session_id: {
+            type: "string",
+            description: "Optional session ID. If omitted, saves to the most recent session.",
+          },
+        },
+        required: ["note"],
+      },
+    },
+    {
+      name: "recall_notes",
+      description:
+        "Search saved notes across sessions. Use when user asks about code words, past instructions, or saved information. Returns matching notes with dates and session context.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "Text to search for in notes" },
+          tag: { type: "string", description: "Filter by tag: codeword, instruction, decision, credential, todo" },
+          last_n: { type: "number", description: "How many recent sessions to search (default: 5, max: 20)" },
+        },
+      },
+    },
   ],
 }));
 
@@ -232,13 +333,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
   // ── recall (task.md only from last session) ────────────────────────────────
   if (name === "recall") {
-    const folders = getBrainFoldersSorted();
+    const projectPath = args?.project_path || null;
+    let folders = getBrainFoldersSorted();
+    if (projectPath) {
+      folders = folders.filter((f) => matchesProject(f.full, projectPath));
+    }
     if (folders.length === 0) {
-      return { content: [{ type: "text", text: "No recent sessions found." }] };
+      return { content: [{ type: "text", text: projectPath ? `No recent sessions found for project: ${projectPath}` : "No recent sessions found." }] };
     }
 
     const last = folders[0];
     const task = readTaskOnly(last.full);
+    const notes = readFileSafe(path.join(last.full, "session_notes.md"));
     const date = new Date(last.mtime).toISOString().slice(0, 10);
 
     let text = `# Last Session (${date})\n**ID:** ${last.name}\n\n`;
@@ -246,6 +352,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       text += task;
     } else {
       text += "_No task.md found. Use recall_session to get other artifacts._";
+    }
+    if (notes.trim()) {
+      text += `\n\n## Notes\n${notes}`;
     }
     text += `\n\n_Need more detail? Call recall_session with ID: ${last.name}_`;
 
@@ -255,7 +364,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   // ── recall_sessions (compact index) ────────────────────────────────────────
   if (name === "recall_sessions") {
     const count = Math.min(args?.count ?? 10, 20);
-    const folders = getBrainFoldersSorted().slice(0, count);
+    const projectPath = args?.project_path || null;
+    const allProjects = args?.all_projects === true;
+    let allFolders = getBrainFoldersSorted();
+    if (projectPath && !allProjects) {
+      allFolders = allFolders.filter((f) => matchesProject(f.full, projectPath));
+    }
+    const folders = allFolders.slice(0, count);
 
     if (folders.length === 0) {
       return { content: [{ type: "text", text: "No sessions with artifacts found." }] };
@@ -293,6 +408,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     let text = `# Session: ${sessionId}\n\n`;
     if (artifacts["task.md"]) {
       text += `## Tasks\n${artifacts["task.md"]}\n\n`;
+    }
+    if (artifacts["session_notes.md"]) {
+      text += `## Notes\n${artifacts["session_notes.md"]}\n\n`;
     }
     if (artifacts["walkthrough.md"]) {
       text += `## Walkthrough\n${artifacts["walkthrough.md"]}\n\n`;
@@ -356,6 +474,49 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
   }
 
+  // ── save_note ──────────────────────────────────────────────────────────────
+  if (name === "save_note") {
+    try {
+      let folderPath;
+      if (args.session_id) {
+        folderPath = path.join(BRAIN_DIR, args.session_id);
+      } else {
+        const folders = getBrainFoldersSorted();
+        if (folders.length === 0) {
+          return { content: [{ type: "text", text: "❌ No sessions found to save note to." }] };
+        }
+        folderPath = folders[0].full;
+      }
+      if (!fs.existsSync(folderPath)) {
+        fs.mkdirSync(folderPath, { recursive: true });
+      }
+      const filePath = appendNote(folderPath, args.note, args.tag);
+      const tag = args.tag ? ` [#${args.tag}]` : "";
+      return {
+        content: [{ type: "text", text: `✅ Note saved${tag}: ${filePath}` }],
+      };
+    } catch (err) {
+      return { content: [{ type: "text", text: `❌ Error: ${err.message}` }] };
+    }
+  }
+
+  // ── recall_notes ───────────────────────────────────────────────────────────
+  if (name === "recall_notes") {
+    const lastN = Math.min(args?.last_n ?? 5, 20);
+    const results = searchNotes(args?.query, args?.tag, lastN);
+    if (results.length === 0) {
+      return {
+        content: [{ type: "text", text: "📭 No notes found." + (args?.query ? ` Query: "${args.query}"` : "") }],
+      };
+    }
+    let text = `# Found ${results.length} note(s)\n\n`;
+    for (const r of results) {
+      text += `**Session:** ${r.title} (${r.date}) \`${r.sessionId}\`\n`;
+      text += r.entry + "\n\n---\n\n";
+    }
+    return { content: [{ type: "text", text }] };
+  }
+
   return { content: [{ type: "text", text: `Unknown tool: ${name}` }] };
 });
 
@@ -363,7 +524,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  process.stderr.write("✅ Antigravity Context MCP Server v2.0 running\n");
+  process.stderr.write("✅ Antigravity Context MCP Server v3.0 running\n");
 }
 
 main().catch((err) => {
