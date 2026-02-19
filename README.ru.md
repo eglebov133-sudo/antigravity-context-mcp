@@ -32,7 +32,7 @@
 
 Открой чат Antigravity и отправь ссылку на этот репозиторий:
 
-> *«установи этот MCP-сервер: https://github.com/eglebov133/antigravity-context-mcp»*
+> *«установи этот MCP-сервер: https://github.com/eglebov133-sudo/antigravity-context-mcp»*
 
 Агент сам склонирует, установит зависимости и пропишет конфигурацию. Перезапусти Antigravity — готово.
 
@@ -40,7 +40,7 @@
 <summary>Ручная установка</summary>
 
 ```bash
-git clone https://github.com/eglebov133/antigravity-context-mcp.git
+git clone https://github.com/eglebov133-sudo/antigravity-context-mcp.git
 cd antigravity-context-mcp
 npm install
 ```

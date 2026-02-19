@@ -34,7 +34,7 @@ No paths, no arguments, no commands. Just talk.
 
 Paste the link to this repo into an Antigravity chat:
 
-> *"install this MCP server: https://github.com/eglebov133/antigravity-context-mcp"*
+> *"install this MCP server: https://github.com/eglebov133-sudo/antigravity-context-mcp"*
 
 The agent will clone it, install dependencies, and configure everything. Restart Antigravity — done.
 
@@ -42,7 +42,7 @@ The agent will clone it, install dependencies, and configure everything. Restart
 <summary>Manual installation</summary>
 
 ```bash
-git clone https://github.com/eglebov133/antigravity-context-mcp.git
+git clone https://github.com/eglebov133-sudo/antigravity-context-mcp.git
 cd antigravity-context-mcp
 npm install
 ```
