@@ -1,0 +1,6 @@
+.git
+.gitignore
+.credentials
+.credentials.enc
+AGENT_CONTEXT.md
+.backups/

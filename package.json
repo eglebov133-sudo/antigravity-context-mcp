@@ -1,25 +1,48 @@
 {
   "name": "antigravity-context-mcp",
   "version": "5.0.0",
-  "description": "MCP server that provides Antigravity with project context from previous conversations. Solves the context loss problem between chat sessions.",
+  "description": "MCP server that gives AI agents persistent memory across sessions. Context recall, encrypted credentials, session notes, export/import — zero external requests.",
   "type": "module",
   "main": "server.js",
+  "bin": {
+    "antigravity-context-mcp": "server.js"
+  },
   "scripts": {
     "start": "node server.js"
   },
   "keywords": [
-    "antigravity",
     "mcp",
-    "context",
+    "mcp-server",
     "model-context-protocol",
+    "ai-agent",
+    "ai-memory",
+    "context",
+    "persistent-memory",
+    "antigravity",
+    "developer-tools",
     "ai-coding",
-    "developer-tools"
+    "session-management",
+    "encrypted-credentials"
   ],
   "license": "MIT",
+  "author": "Evgenii Glebov",
+  "homepage": "https://github.com/eglebov133-sudo/antigravity-context-mcp#readme",
   "repository": {
     "type": "git",
-    "url": "https://github.com/eglebov133-sudo/antigravity-context-mcp"
+    "url": "git+https://github.com/eglebov133-sudo/antigravity-context-mcp.git"
   },
+  "bugs": {
+    "url": "https://github.com/eglebov133-sudo/antigravity-context-mcp/issues"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "files": [
+    "server.js",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0"
   }
