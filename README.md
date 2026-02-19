@@ -20,15 +20,21 @@ Session crashed. New chat. You type:
 
 > *"continue"*
 
-The agent calls `recall`, reads the last task — what was done, what's in progress, what was planned — and picks up where it left off.
+The agent calls `recall` and gets the task checklist from the last session — what was done, what's in progress, where things stopped.
 
-Need a broader picture?
+Need more detail?
 
-> *"what have we been working on this week?"*
+> *"show me the details of that session"*
 
-The agent calls `recall_all` — last few sessions plus accumulated project knowledge.
+The agent fetches the full context — walkthrough, plan, decisions made.
 
-No paths, no arguments, no commands. Just talk.
+Want to look back at the week?
+
+> *"show recent sessions"*
+
+You get a list with dates and titles. Pick one — the agent loads details **only for that session**.
+
+Context loads **progressively** — the agent decides how much it needs. Not everything at once, but on demand, like a normal conversation.
 
 ## Install
 
@@ -73,8 +79,6 @@ The server taps into what Antigravity already stores but doesn't use between ses
 - Implementation plans — architectural decisions made
 
 All local. No network. Just files on your disk that were always there.
-
-The response is capped at ~4000 characters — so it won't overload the new session with the same volume that crashed the previous one.
 
 ## Beyond context
 

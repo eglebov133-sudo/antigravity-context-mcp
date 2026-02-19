@@ -13,10 +13,6 @@ const ANTIGRAVITY_DIR = path.join(os.homedir(), ".gemini", "antigravity");
 const BRAIN_DIR = path.join(ANTIGRAVITY_DIR, "brain");
 const KNOWLEDGE_DIR = path.join(ANTIGRAVITY_DIR, "knowledge");
 const CODE_TRACKER_DIR = path.join(ANTIGRAVITY_DIR, "code_tracker", "active");
-
-// ─── Config ───────────────────────────────────────────────────────────────────
-const MAX_CHARS_PER_ARTIFACT = 1500;
-const MAX_TOTAL_CHARS = 4000;
 const CREDENTIALS_FILENAME = ".credentials";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -29,6 +25,7 @@ function readFileSafe(filePath) {
   }
 }
 
+/** Get all brain folders sorted by mtime descending, with artifact info */
 function getBrainFoldersSorted() {
   if (!fs.existsSync(BRAIN_DIR)) return [];
   return fs
@@ -39,44 +36,45 @@ function getBrainFoldersSorted() {
     })
     .map((name) => {
       const full = path.join(BRAIN_DIR, name);
-      return { name, full, mtime: fs.statSync(full).mtimeMs };
+      const artifactFiles = ["task.md", "walkthrough.md", "implementation_plan.md"];
+      const hasArtifacts = artifactFiles.some((f) => {
+        const content = readFileSafe(path.join(full, f));
+        return content.trim().length > 0;
+      });
+      return { name, full, mtime: fs.statSync(full).mtimeMs, hasArtifacts };
     })
+    .filter((f) => f.hasArtifacts)
     .sort((a, b) => b.mtime - a.mtime);
 }
 
-function readBrainArtifacts(folderPath) {
+/** Extract first meaningful line from task.md as a title */
+function extractTitle(folderPath) {
+  const taskContent = readFileSafe(path.join(folderPath, "task.md"));
+  if (!taskContent.trim()) {
+    const planContent = readFileSafe(path.join(folderPath, "implementation_plan.md"));
+    const firstLine = planContent.split(/\r?\n/).find((l) => l.trim().startsWith("#"));
+    return firstLine ? firstLine.replace(/^#+\s*/, "").trim() : "Untitled session";
+  }
+  const firstHeading = taskContent.split(/\r?\n/).find((l) => l.trim().startsWith("#"));
+  if (firstHeading) return firstHeading.replace(/^#+\s*/, "").trim();
+  const firstLine = taskContent.split(/\r?\n/).find((l) => l.trim().length > 0);
+  return firstLine ? firstLine.trim().slice(0, 80) : "Untitled session";
+}
+
+/** Read only task.md from a brain folder */
+function readTaskOnly(folderPath) {
+  return readFileSafe(path.join(folderPath, "task.md"));
+}
+
+/** Read all artifacts from a brain folder (full content) */
+function readAllArtifacts(folderPath) {
   const files = ["task.md", "walkthrough.md", "implementation_plan.md"];
   const results = {};
   for (const file of files) {
     const content = readFileSafe(path.join(folderPath, file));
-    if (content.trim()) {
-      results[file] = content.slice(0, MAX_CHARS_PER_ARTIFACT);
-    }
+    if (content.trim()) results[file] = content;
   }
   return results;
-}
-
-function getRelevantKnowledgeItems() {
-  if (!fs.existsSync(KNOWLEDGE_DIR)) return [];
-  const items = [];
-  const kiDirs = fs.readdirSync(KNOWLEDGE_DIR).filter((d) => {
-    if (d === "knowledge.lock") return false;
-    const full = path.join(KNOWLEDGE_DIR, d);
-    return fs.existsSync(full) && fs.statSync(full).isDirectory();
-  });
-
-  for (const kiDir of kiDirs) {
-    const metaPath = path.join(KNOWLEDGE_DIR, kiDir, "metadata.json");
-    const meta = readFileSafe(metaPath);
-    if (!meta) continue;
-    try {
-      const parsed = JSON.parse(meta);
-      items.push({ name: kiDir, summary: parsed.summary || "" });
-    } catch {
-      items.push({ name: kiDir, summary: "" });
-    }
-  }
-  return items;
 }
 
 function listKnownProjects() {
@@ -84,26 +82,19 @@ function listKnownProjects() {
   return fs
     .readdirSync(CODE_TRACKER_DIR)
     .filter((d) => fs.statSync(path.join(CODE_TRACKER_DIR, d)).isDirectory())
-    .map((d) => {
-      const repoName = d.split("_")[0];
-      const files = fs.readdirSync(path.join(CODE_TRACKER_DIR, d));
-      return {
-        project: repoName,
-        tracker_key: d,
-        file_count: files.length,
-        sample_files: files.slice(0, 3).map((f) => f.replace(/^[a-f0-9]+_/, "")),
-      };
-    });
+    .map((d) => ({
+      project: d.split("_")[0],
+      tracker_key: d,
+      file_count: fs.readdirSync(path.join(CODE_TRACKER_DIR, d)).length,
+    }));
 }
 
 function readCredentials(projectPath) {
   const filePath = path.join(projectPath, CREDENTIALS_FILENAME);
   const content = readFileSafe(filePath);
   if (!content.trim()) return null;
-
   const creds = {};
   let currentSection = "general";
-
   for (const line of content.split(/\r?\n/)) {
     const trimmed = line.trim();
     if (!trimmed) continue;
@@ -126,7 +117,6 @@ function writeCredentials(projectPath, entries) {
   const filePath = path.join(projectPath, CREDENTIALS_FILENAME);
   let content = "# Credentials — managed by Antigravity Context MCP\n";
   content += "# DO NOT commit this file to Git!\n\n";
-
   for (const [section, pairs] of Object.entries(entries)) {
     content += `# ${section}\n`;
     for (const [key, value] of Object.entries(pairs)) {
@@ -134,9 +124,7 @@ function writeCredentials(projectPath, entries) {
     }
     content += "\n";
   }
-
   fs.writeFileSync(filePath, content, "utf8");
-
   const gitignorePath = path.join(projectPath, ".gitignore");
   if (fs.existsSync(gitignorePath)) {
     const gitignore = fs.readFileSync(gitignorePath, "utf8");
@@ -144,55 +132,13 @@ function writeCredentials(projectPath, entries) {
       fs.appendFileSync(gitignorePath, `\n# Credentials (auto-added)\n${CREDENTIALS_FILENAME}\n`, "utf8");
     }
   }
-
   return filePath;
-}
-
-/** Build context output with total character limit */
-function buildContext(sessions, includeKI) {
-  let output = "";
-  let totalChars = 0;
-
-  for (const session of sessions) {
-    const modDate = new Date(session.mtime).toISOString().slice(0, 10);
-    let block = `### Session (${modDate})\n`;
-
-    if (session.artifacts["task.md"]) {
-      block += `**Tasks:**\n${session.artifacts["task.md"]}\n`;
-    }
-    if (session.artifacts["walkthrough.md"]) {
-      block += `**Walkthrough:**\n${session.artifacts["walkthrough.md"]}\n`;
-    }
-    if (session.artifacts["implementation_plan.md"]) {
-      block += `**Plan:**\n${session.artifacts["implementation_plan.md"]}\n`;
-    }
-
-    if (totalChars + block.length > MAX_TOTAL_CHARS) {
-      block = block.slice(0, MAX_TOTAL_CHARS - totalChars) + "\n...(truncated)\n";
-      output += block;
-      break;
-    }
-
-    output += block + "\n";
-    totalChars += block.length;
-  }
-
-  if (includeKI) {
-    const kiItems = getRelevantKnowledgeItems();
-    if (kiItems.length > 0) {
-      const kiBlock = "\n## Knowledge Items\n" +
-        kiItems.slice(0, 5).map((ki) => `- **${ki.name}**: ${(ki.summary).slice(0, 150)}`).join("\n");
-      output += kiBlock;
-    }
-  }
-
-  return output;
 }
 
 // ─── MCP Server ───────────────────────────────────────────────────────────────
 
 const server = new Server(
-  { name: "antigravity-context", version: "1.1.0" },
+  { name: "antigravity-context", version: "2.0.0" },
   { capabilities: { tools: {} } }
 );
 
@@ -201,49 +147,51 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: "recall",
       description:
-        "Recall the last task from the most recent Antigravity session. Use when the user says things like 'continue', 'what were we doing', 'продолжи', 'что мы делали'. No arguments required — returns the last session's tasks, walkthrough, and plan. This is the most commonly needed tool.",
-      inputSchema: {
-        type: "object",
-        properties: {},
-      },
+        "Quick recall: returns ONLY the task checklist (task.md) from the most recent session. Lightweight, won't overload context. Use when user says 'continue', 'продолжи', 'what were we doing'. If you need more detail, follow up with recall_session.",
+      inputSchema: { type: "object", properties: {} },
     },
     {
-      name: "recall_all",
+      name: "recall_sessions",
       description:
-        "Recall context from the last N Antigravity sessions plus knowledge items. Use when the user wants a broader picture: 'show full context', 'покажи весь контекст', 'что мы делали на этой неделе'. Project path is optional — if omitted, returns the most recent sessions regardless of project.",
+        "List recent sessions with dates and titles. Returns a compact index so you can pick which session to drill into. Use when user wants a broader view: 'what have we been working on', 'покажи сессии'.",
       inputSchema: {
         type: "object",
         properties: {
-          project_path: {
-            type: "string",
-            description: "Optional. Absolute path to the project directory. If omitted, returns recent sessions globally.",
-          },
-          last_n_sessions: {
+          count: {
             type: "number",
-            description: "How many recent sessions to include (default: 3, max: 10)",
+            description: "How many sessions to list (default: 10, max: 20)",
           },
         },
       },
     },
     {
-      name: "list_projects",
-      description: "List all known projects tracked by Antigravity.",
+      name: "recall_session",
+      description:
+        "Get FULL details of a specific session by its ID (from recall_sessions). Returns task.md, walkthrough.md, and implementation_plan.md without truncation.",
       inputSchema: {
         type: "object",
-        properties: {},
+        properties: {
+          session_id: {
+            type: "string",
+            description: "Session ID from recall_sessions list",
+          },
+        },
+        required: ["session_id"],
       },
+    },
+    {
+      name: "list_projects",
+      description: "List all known projects tracked by Antigravity.",
+      inputSchema: { type: "object", properties: {} },
     },
     {
       name: "get_credentials",
       description:
-        "Read saved credentials (.credentials file) from the project directory. Returns passwords, API keys, SSH logins that persist between sessions.",
+        "Read saved credentials (.credentials file) from the project directory.",
       inputSchema: {
         type: "object",
         properties: {
-          project_path: {
-            type: "string",
-            description: "Absolute path to the project directory",
-          },
+          project_path: { type: "string", description: "Absolute path to the project directory" },
         },
         required: ["project_path"],
       },
@@ -251,14 +199,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: "save_credentials",
       description:
-        "Save credentials to .credentials file in the project directory. Automatically adds to .gitignore.",
+        "Save credentials to .credentials file in the project directory. Auto-adds to .gitignore.",
       inputSchema: {
         type: "object",
         properties: {
-          project_path: {
-            type: "string",
-            description: "Absolute path to the project directory",
-          },
+          project_path: { type: "string", description: "Absolute path to the project directory" },
           credentials: {
             type: "object",
             description: 'Sections with key-value pairs. Example: {"Hosting": {"LOGIN": "user", "PASSWORD": "pass"}}',
@@ -269,19 +214,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "save_context_file",
-      description:
-        "Write an AGENT_CONTEXT.md file into the project directory with a context snapshot.",
+      description: "Write AGENT_CONTEXT.md into the project directory.",
       inputSchema: {
         type: "object",
         properties: {
-          project_path: {
-            type: "string",
-            description: "Absolute path to the project directory",
-          },
-          context_text: {
-            type: "string",
-            description: "Markdown content to write into AGENT_CONTEXT.md",
-          },
+          project_path: { type: "string", description: "Absolute path to the project directory" },
+          context_text: { type: "string", description: "Markdown content to write" },
         },
         required: ["project_path", "context_text"],
       },
@@ -292,57 +230,85 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
 
-  // ── recall (last task only) ────────────────────────────────────────────────
+  // ── recall (task.md only from last session) ────────────────────────────────
   if (name === "recall") {
-    const brainFolders = getBrainFoldersSorted();
-
-    // Find the most recent folder with actual artifacts
-    for (const folder of brainFolders.slice(0, 10)) {
-      const artifacts = readBrainArtifacts(folder.full);
-      if (Object.keys(artifacts).length > 0) {
-        const output = buildContext([{ ...folder, artifacts }], false);
-        return {
-          content: [{ type: "text", text: `# Last Session\n\n${output}` }],
-        };
-      }
+    const folders = getBrainFoldersSorted();
+    if (folders.length === 0) {
+      return { content: [{ type: "text", text: "No recent sessions found." }] };
     }
 
-    return {
-      content: [{ type: "text", text: "No recent sessions with artifacts found." }],
-    };
+    const last = folders[0];
+    const task = readTaskOnly(last.full);
+    const date = new Date(last.mtime).toISOString().slice(0, 10);
+
+    let text = `# Last Session (${date})\n**ID:** ${last.name}\n\n`;
+    if (task) {
+      text += task;
+    } else {
+      text += "_No task.md found. Use recall_session to get other artifacts._";
+    }
+    text += `\n\n_Need more detail? Call recall_session with ID: ${last.name}_`;
+
+    return { content: [{ type: "text", text }] };
   }
 
-  // ── recall_all ─────────────────────────────────────────────────────────────
-  if (name === "recall_all") {
-    const lastN = Math.min(args?.last_n_sessions ?? 3, 10);
-    const brainFolders = getBrainFoldersSorted().slice(0, lastN * 3);
+  // ── recall_sessions (compact index) ────────────────────────────────────────
+  if (name === "recall_sessions") {
+    const count = Math.min(args?.count ?? 10, 20);
+    const folders = getBrainFoldersSorted().slice(0, count);
 
-    const sessions = [];
-    for (const folder of brainFolders) {
-      if (sessions.length >= lastN) break;
-      const artifacts = readBrainArtifacts(folder.full);
-      if (Object.keys(artifacts).length > 0) {
-        sessions.push({ ...folder, artifacts });
-      }
+    if (folders.length === 0) {
+      return { content: [{ type: "text", text: "No sessions with artifacts found." }] };
     }
 
-    if (sessions.length === 0) {
-      return {
-        content: [{ type: "text", text: "No recent sessions with artifacts found." }],
-      };
+    let text = "# Recent Sessions\n\n";
+    text += "| # | Date | Title | ID |\n";
+    text += "|---|------|-------|----|\n";
+
+    folders.forEach((f, i) => {
+      const date = new Date(f.mtime).toISOString().slice(0, 10);
+      const title = extractTitle(f.full);
+      text += `| ${i + 1} | ${date} | ${title} | \`${f.name}\` |\n`;
+    });
+
+    text += "\n_Use recall_session(session_id) to get full details of any session._";
+
+    return { content: [{ type: "text", text }] };
+  }
+
+  // ── recall_session (full details of one session) ───────────────────────────
+  if (name === "recall_session") {
+    const sessionId = args.session_id;
+    const folderPath = path.join(BRAIN_DIR, sessionId);
+
+    if (!fs.existsSync(folderPath) || !fs.statSync(folderPath).isDirectory()) {
+      return { content: [{ type: "text", text: `Session not found: ${sessionId}` }] };
     }
 
-    const output = buildContext(sessions, true);
-    return {
-      content: [{ type: "text", text: `# Context (${sessions.length} sessions)\n\n${output}` }],
-    };
+    const artifacts = readAllArtifacts(folderPath);
+    if (Object.keys(artifacts).length === 0) {
+      return { content: [{ type: "text", text: `No artifacts in session: ${sessionId}` }] };
+    }
+
+    let text = `# Session: ${sessionId}\n\n`;
+    if (artifacts["task.md"]) {
+      text += `## Tasks\n${artifacts["task.md"]}\n\n`;
+    }
+    if (artifacts["walkthrough.md"]) {
+      text += `## Walkthrough\n${artifacts["walkthrough.md"]}\n\n`;
+    }
+    if (artifacts["implementation_plan.md"]) {
+      text += `## Implementation Plan\n${artifacts["implementation_plan.md"]}\n\n`;
+    }
+
+    return { content: [{ type: "text", text }] };
   }
 
   // ── list_projects ──────────────────────────────────────────────────────────
   if (name === "list_projects") {
     const projects = listKnownProjects();
     const text = projects
-      .map((p) => `- **${p.project}** (${p.file_count} files): ${p.sample_files.join(", ")}`)
+      .map((p) => `- **${p.project}** (${p.file_count} tracked files)`)
       .join("\n");
     return {
       content: [{ type: "text", text: `# Known Projects\n\n${text || "_None found_"}` }],
@@ -354,18 +320,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const creds = readCredentials(args.project_path);
     if (!creds) {
       return {
-        content: [{
-          type: "text",
-          text: `📭 No .credentials file in ${args.project_path}\n\nUse save_credentials to store passwords.`,
-        }],
+        content: [{ type: "text", text: `📭 No .credentials file in ${args.project_path}` }],
       };
     }
-    let text = `# Credentials: ${args.project_path}\n\n`;
+    let text = `# Credentials\n\n`;
     for (const [section, pairs] of Object.entries(creds)) {
       text += `## ${section}\n`;
-      for (const [key, value] of Object.entries(pairs)) {
+      for (const [key, value] of Object.entries(pairs))
         text += `- **${key}**: ${value}\n`;
-      }
       text += "\n";
     }
     return { content: [{ type: "text", text }] };
@@ -376,43 +338,32 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     try {
       const filePath = writeCredentials(args.project_path, args.credentials);
       return {
-        content: [{
-          type: "text",
-          text: `✅ Saved to: ${filePath}\n(auto-added to .gitignore)`,
-        }],
+        content: [{ type: "text", text: `✅ Saved to: ${filePath} (auto-added to .gitignore)` }],
       };
     } catch (err) {
-      return {
-        content: [{ type: "text", text: `❌ Error: ${err.message}` }],
-      };
+      return { content: [{ type: "text", text: `❌ Error: ${err.message}` }] };
     }
   }
 
   // ── save_context_file ──────────────────────────────────────────────────────
   if (name === "save_context_file") {
-    const filePath = path.join(args.project_path, "AGENT_CONTEXT.md");
     try {
+      const filePath = path.join(args.project_path, "AGENT_CONTEXT.md");
       fs.writeFileSync(filePath, args.context_text, "utf8");
-      return {
-        content: [{ type: "text", text: `✅ Context saved to: ${filePath}` }],
-      };
+      return { content: [{ type: "text", text: `✅ Saved to: ${filePath}` }] };
     } catch (err) {
-      return {
-        content: [{ type: "text", text: `❌ Error: ${err.message}` }],
-      };
+      return { content: [{ type: "text", text: `❌ Error: ${err.message}` }] };
     }
   }
 
-  return {
-    content: [{ type: "text", text: `Unknown tool: ${name}` }],
-  };
+  return { content: [{ type: "text", text: `Unknown tool: ${name}` }] };
 });
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  process.stderr.write("✅ Antigravity Context MCP Server v1.1 running\n");
+  process.stderr.write("✅ Antigravity Context MCP Server v2.0 running\n");
 }
 
 main().catch((err) => {
