@@ -82,17 +82,30 @@ All local. No network. Just files on your disk that were always there.
 
 ## Beyond context
 
-**Passwords between sessions.** You know the drill — you give the agent your hosting password, the session dies, the next agent asks for it again. The server stores credentials in a `.credentials` file in your project, auto-excluded from Git.
+**Passwords between sessions.** You know the drill — you give the agent your hosting password, the session dies, the next agent asks for it again. The server stores credentials encrypted with AES-256-GCM (key derived from your machine), auto-excluded from Git.
+
+**Persistent notes.** Save code words, instructions, decisions with `save_note` — search them later with `recall_notes`.
 
 **Context snapshots.** The agent can save an `AGENT_CONTEXT.md` into your project — persistent memory that survives any number of crashes.
 
 **Project list.** Shows what Antigravity knows about, so you can switch projects without orientation time.
 
+**Diagnostics.** `context_status` shows server health — sessions, notes, disk usage, encryption status.
+
+## What's new in v4.0
+
+- **🔐 Encrypted credentials** — AES-256-GCM instead of plaintext. Key is machine-bound. Old `.credentials` files auto-migrate.
+- **🛡️ Error handling** — every tool wrapped in try/catch with clear error messages. No more silent failures.
+- **📏 Response limits** — 50,000 char cap with `[TRUNCATED]` warning. Prevents context window overflow.
+- **🩺 Diagnostics** — `context_status` tool shows session count, notes, disk usage, encryption status.
+- **✅ Input validation** — path existence checks and session ID format validation before execution.
+
 ## Security
 
 - Runs locally via stdio — no open ports, no network
 - Read-only by default — writes only when you explicitly ask
-- Credentials stay on your machine, auto-excluded from Git
+- Credentials encrypted with AES-256-GCM, key bound to machine
+- Auto-migration from plaintext to encrypted
 - Zero telemetry, zero external requests
 
 ## Requirements
@@ -107,3 +120,4 @@ MIT
 ---
 
 *Built because we got tired of introducing ourselves to our own AI agent.*
+
